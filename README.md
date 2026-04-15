@@ -8,8 +8,8 @@ Pseudo-IMAP server connected to AWS SES Email Receiving API and Cloudflare Worke
 
 1. Configure SES Email Receiving rules: https://docs.aws.amazon.com/ses/latest/DeveloperGuide/receiving-email-setting-up-event-notification-rules.html
    1. Write to S3 bucket
-   1. Publish SNS topic
-      1. Subscribed: HTTPS endpoint
+      1. With SNS Topic Subscription
+   1. SNS sends to HTTPS endpoint
 1. Confirm DNS MX records for SES
 1. Test by sending an email
 

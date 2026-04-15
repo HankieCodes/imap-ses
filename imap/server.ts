@@ -49,7 +49,6 @@ interface Message {
     filename: string;
     filepath: string;
     size: number;
-    flags: Set<string>;
 }
 
 /** Return the per-user mail directory, creating it if needed. */
@@ -77,7 +76,6 @@ function loadMessages(dir: string): Message[] {
             filename,
             filepath,
             size,
-            flags: new Set<string>(),
         };
     });
 }
@@ -86,34 +84,8 @@ function loadMessages(dir: string): Message[] {
 // EML header helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Extract the local-part (user portion) from the first "To:" header in an EML
- * string. Handles common forms:
- *   To: alice@example.com
- *   To: Alice Smith <alice@example.com>
- *   To: "Alice Smith" <alice@example.com>
- * Returns null if the header is absent or unparseable.
- */
-function extractToUser(eml: string): string | null {
-    // Headers end at the first blank line; avoid scanning the body
-    const headerBlock = eml.slice(0, eml.search(/\r?\n\r?\n/));
-
-    // Unfold multi-line header values (RFC 5322 folding)
-    const unfolded = headerBlock.replace(/\r?\n[ \t]+/g, " ");
-
-    const match = unfolded.match(/^To:[ \t]*(.+)$/im);
-    if (!match) return null;
-
-    const value = match[1].trim();
-
-    // Angle-bracket form: Foo Bar <user@host>
-    const angleMatch = value.match(/<([^>]+)>/);
-    const address = angleMatch ? angleMatch[1] : value;
-
-    const atIdx = address.indexOf("@");
-    if (atIdx === -1) return null;
-
-    return address.slice(0, atIdx).trim().toLowerCase() || null;
+function extractToUser(address: string): string | null {
+    return address.replace('@', '.').trim().toLowerCase() || null;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,217 +145,200 @@ function processCommand(
         send("* BAD malformed command");
         return;
     }
-    const tag = raw.slice(0, spaceIdx);
-    const rest = raw.slice(spaceIdx + 1);
-    const cmdEnd = rest.indexOf(" ");
-    const command = (cmdEnd === -1 ? rest : rest.slice(0, cmdEnd)).toUpperCase();
-    const args = cmdEnd === -1 ? "" : rest.slice(cmdEnd + 1);
 
     const ok = (msg: string) => send(`${tag} OK ${msg}`);
     const no = (msg: string) => send(`${tag} NO ${msg}`);
     const bad = (msg: string) => send(`${tag} BAD ${msg}`);
 
-    switch (command) {
-        // -----------------------------------------------------------------------
-        case "CAPABILITY":
-            send("* CAPABILITY IMAP4rev1 AUTH=PLAIN");
-            ok("CAPABILITY completed");
-            break;
-
-        // -----------------------------------------------------------------------
-        case "NOOP":
-            ok("NOOP completed");
-            break;
-
-        // -----------------------------------------------------------------------
-        case "LOGOUT":
-            send("* BYE Logging out");
-            ok("LOGOUT completed");
-            session.state = "logout";
-            session.socket.end();
-            break;
-
-        // -----------------------------------------------------------------------
-        case "LOGIN": {
-            // LOGIN "user" "pass" — password is intentionally ignored
-            const parts = parseArgs(args);
-            if (!parts[0]) {
-                bad("LOGIN requires a username");
-                break;
-            }
-            session.username = parts[0].toLowerCase();
-            session.mailDir = userDir(session.username);
-            session.state = "authenticated";
-            console.log(`[IMAP] LOGIN user=${session.username} dir=${session.mailDir}`);
-            ok("LOGIN completed");
-            break;
-        }
-
-        // -----------------------------------------------------------------------
-        case "LIST": {
-            if (session.state === "notauthenticated") { no("Not authenticated"); break; }
-            send('* LIST (\\HasNoChildren) "/" "INBOX"');
-            ok("LIST completed");
-            break;
-        }
-
-        // -----------------------------------------------------------------------
-        case "SELECT":
-        case "EXAMINE": {
-            if (session.state === "notauthenticated") { no("Not authenticated"); break; }
-            const mailbox = args.replace(/"/g, "").trim().toUpperCase();
-            if (mailbox !== "INBOX") {
-                no(`Mailbox "${mailbox}" does not exist`);
-                break;
-            }
-            session.messages = loadMessages(session.mailDir);
-            const count = session.messages.length;
-            send(`* ${count} EXISTS`);
-            send("* 0 RECENT");
-            send("* OK [UNSEEN 1] Message 1 is first unseen");
-            send("* OK [UIDVALIDITY 1] UIDs valid");
-            send(`* OK [UIDNEXT ${count + 1}] Predicted next UID`);
-            send(`* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)`);
-            send(
-                command === "SELECT"
-                    ? "* [READ-WRITE] SELECT completed"
-                    : "* [READ-ONLY] EXAMINE completed"
-            );
-            session.state = "selected";
-            ok(`${command} completed`);
-            break;
-        }
-
-        // -----------------------------------------------------------------------
-        case "STATUS": {
-            if (session.state === "notauthenticated") { no("Not authenticated"); break; }
-            const msgs = loadMessages(session.mailDir);
-            const count = msgs.length;
-            send(`* STATUS INBOX (MESSAGES ${count} UNSEEN ${count} UIDNEXT ${count + 1})`);
-            ok("STATUS completed");
-            break;
-        }
-
-        // -----------------------------------------------------------------------
-        case "FETCH": {
-            if (session.state !== "selected") { no("No mailbox selected"); break; }
-
-            const [seqSet, ...itemParts] = args.split(" ");
-            const itemSpec = itemParts.join(" ").toUpperCase();
-            const indices = resolveSequenceSet(seqSet, session.messages.length);
-
-            for (const idx of indices) {
-                const msg = session.messages[idx];
-                if (!msg) continue;
-
-                let body = "";
-                try {
-                    body = fs.readFileSync(msg.filepath, "utf8");
-                } catch {
-                    continue;
-                }
-
-                const headerEnd = body.indexOf("\r\n\r\n");
-                const headers = headerEnd !== -1 ? body.slice(0, headerEnd + 4) : body;
-                const seqNum = idx + 1;
-                const flagStr = [...msg.flags].join(" ");
-
-                if (
-                    itemSpec.includes("ENVELOPE") ||
-                    itemSpec.includes("RFC822.HEADER") ||
-                    itemSpec.includes("BODY[HEADER")
-                ) {
-                    send(
-                        `* ${seqNum} FETCH (UID ${msg.uid} FLAGS (${flagStr}) BODY[HEADER] {${headers.length}}`
-                    );
-                    send(headers + ")");
-                } else if (itemSpec.includes("BODY[]") || itemSpec.includes("RFC822")) {
-                    send(
-                        `* ${seqNum} FETCH (UID ${msg.uid} FLAGS (${flagStr}) BODY[] {${body.length}}`
-                    );
-                    send(body + ")");
-                } else if (itemSpec.includes("FLAGS")) {
-                    send(`* ${seqNum} FETCH (UID ${msg.uid} FLAGS (${flagStr}))`);
-                } else {
-                    send(
-                        `* ${seqNum} FETCH (UID ${msg.uid} FLAGS (${flagStr}) RFC822 {${body.length}}`
-                    );
-                    send(body + ")");
-                }
-            }
-            ok("FETCH completed");
-            break;
-        }
-
-        // -----------------------------------------------------------------------
-        case "STORE": {
-            if (session.state !== "selected") { no("No mailbox selected"); break; }
-
-            const parts = args.split(" ");
-            if (parts.length < 3) { bad("STORE requires seq-set, item, and value"); break; }
-
-            const [seqSet, flagItem, ...flagValueParts] = parts;
-            const flagValue = flagValueParts.join(" ");
-            const op = flagItem.toUpperCase();
-            const newFlags = extractFlags(flagValue);
-            const indices = resolveSequenceSet(seqSet, session.messages.length);
-
-            for (const idx of indices) {
-                const msg = session.messages[idx];
-                if (!msg) continue;
-
-                if (op === "+FLAGS" || op === "+FLAGS.SILENT") {
-                    newFlags.forEach((f) => msg.flags.add(f));
-                } else if (op === "-FLAGS" || op === "-FLAGS.SILENT") {
-                    newFlags.forEach((f) => msg.flags.delete(f));
-                } else {
-                    msg.flags = new Set(newFlags);
-                }
-
-                // ★ \Seen → delete (read = consumed)
-                if (msg.flags.has("\\Seen") && fs.existsSync(msg.filepath)) {
-                    fs.unlinkSync(msg.filepath);
-                    console.log(`[IMAP] deleted (\\Seen): ${msg.filepath}`);
-                }
-
-                if (!op.includes("SILENT")) {
-                    send(
-                        `* ${idx + 1} FETCH (UID ${msg.uid} FLAGS (${[...msg.flags].join(" ")}))`
-                    );
-                }
-            }
-            ok("STORE completed");
-            break;
-        }
-
-        // -----------------------------------------------------------------------
-        case "EXPUNGE": {
-            if (session.state !== "selected") { no("No mailbox selected"); break; }
-
-            const toExpunge = session.messages.filter((m) => m.flags.has("\\Deleted"));
-            for (const msg of toExpunge) {
-                if (fs.existsSync(msg.filepath)) fs.unlinkSync(msg.filepath);
-                send(`* ${session.messages.indexOf(msg) + 1} EXPUNGE`);
-                console.log(`[IMAP] expunged: ${msg.filepath}`);
-            }
-            session.messages = session.messages.filter((m) => !m.flags.has("\\Deleted"));
-            ok("EXPUNGE completed");
-            break;
-        }
-
-        // -----------------------------------------------------------------------
-        case "SEARCH": {
-            if (session.state !== "selected") { no("No mailbox selected"); break; }
-            const all = session.messages.map((_, i) => i + 1).join(" ");
-            send(`* SEARCH ${all}`);
-            ok("SEARCH completed");
-            break;
-        }
-
-        // -----------------------------------------------------------------------
-        default:
-            bad(`Command "${command}" not implemented`);
+    function cmdCapability() {
+        send("* CAPABILITY IMAP4rev1 AUTH=PLAIN");
+        ok("CAPABILITY completed");
     }
+
+    function cmdNoop() {
+        ok("NOOP completed");
+    }
+
+    function cmdLogout() {
+        send("* BYE Logging out");
+        ok("LOGOUT completed");
+        session.state = "logout";
+        session.socket.end();
+    }
+
+    function cmdLogin(args: string) {
+        // LOGIN "user" "pass" — password is intentionally ignored
+        const parts = parseArgs(args);
+        if (!parts[0]) {
+            bad("LOGIN requires a username");
+            return;
+        }
+        session.username = parts[0].toLowerCase();
+        session.mailDir = userDir(session.username);
+        session.state = "authenticated";
+        console.log(`[IMAP] LOGIN user=${session.username} dir=${session.mailDir}`);
+        ok("LOGIN completed");
+    }
+
+    function cmdList() {
+        if (session.state === "notauthenticated") {
+            no("Not authenticated");
+            return;
+        }
+        send('* LIST (\\HasNoChildren) "/" "INBOX"');
+        ok("LIST completed");
+    }
+
+    function cmdSelect(args: string) {
+        if (session.state === "notauthenticated") {
+            no("Not authenticated");
+            return;
+        }
+        const mailbox = args.replace(/"/g, "").trim().toUpperCase();
+        if (mailbox !== "INBOX") {
+            no(`Mailbox "${mailbox}" does not exist`);
+            return;
+        }
+        session.messages = loadMessages(session.mailDir);
+        const count = session.messages.length;
+        send(`* ${count} EXISTS`);
+        send("* 0 RECENT");
+        send("* OK [UNSEEN 1] Message 1 is first unseen");
+        send("* OK [UIDVALIDITY 1] UIDs valid");
+        send(`* OK [UIDNEXT ${count + 1}] Predicted next UID`);
+        send(`* FLAGS (\\Seen)`);
+        send("* [READ-WRITE] SELECT completed");
+        session.state = "selected";
+        ok(`SELECT completed`);
+    }
+
+    function cmdStatus() {
+        if (session.state === "notauthenticated") {
+            no("Not authenticated");
+            return;
+        }
+        const msgs = loadMessages(session.mailDir);
+        const count = msgs.length;
+        send(`* STATUS INBOX (MESSAGES ${count} UNSEEN ${count} UIDNEXT ${count + 1})`);
+        ok("STATUS completed");
+    }
+
+    function cmdFetch(args: string, command: string) {
+        if (session.state !== "selected") {
+            no("No mailbox selected");
+            return;
+        }
+
+        const [seqSet, ...itemParts] = args.split(" ");
+        const itemSpec = itemParts.join(" ").replace(/[()]/g, "").toUpperCase();
+        const indices = resolveSequenceSet(seqSet, session.messages.length);
+
+        for (const idx of indices) {
+            const msg = session.messages[idx];
+            if (!msg) continue;
+
+            let eml = "";
+            try {
+                eml = fs.readFileSync(msg.filepath, "utf8");
+            } catch {
+                continue;
+            }
+
+            const seqNum = idx + 1;
+            let [headers, ...bodies] = eml.split("\r\n\r\n");
+            headers += "\r\n\r\n";
+            const body = bodies.join("\r\n\r\n");
+
+            if (itemSpec === "FLAGS") {
+                send(`* ${seqNum} FETCH (UID ${msg.uid} FLAGS ())`);
+            } else if (itemSpec === "RFC822.HEADER") {
+                send(`* ${seqNum} FETCH (UID ${msg.uid} RFC822.HEADER {${headers.length}}`);
+                send(headers + ")");
+            } else if (itemSpec === "RFC822.TEXT") {
+                send(`* ${seqNum} FETCH (UID ${msg.uid} RFC822.TEXT {${body.length}}`);
+                send(body + ")");
+            } else if (itemSpec === "RFC822") {
+                send(`* ${seqNum} FETCH (UID ${msg.uid} RFC822 {${eml.length}}`);
+                send(eml + ")");
+            } else {
+                bad(`FETCH spec ${itemSpec} not supported`);
+                return;
+            }
+        }
+        ok(`FETCH completed`);
+    }
+
+    function cmdStore(args: string) {
+        if (session.state !== "selected") {
+            no("No mailbox selected");
+            return;
+        }
+
+        const parts = args.split(" ");
+        if (parts.length < 3) {
+            bad("STORE requires seq-set, item, and value");
+            return;
+        }
+
+        const [seqSet, flagItem] = parts;
+        const op = flagItem.toUpperCase();
+        const indices = resolveSequenceSet(seqSet, session.messages.length);
+
+        for (const idx of indices) {
+            const msg = session.messages[idx];
+            if (!msg) continue;
+
+            if (fs.existsSync(msg.filepath)) {
+                fs.unlinkSync(msg.filepath);
+                console.log(`[IMAP] deleted (\\Seen): ${msg.filepath}`);
+            }
+
+            if (!op.includes("SILENT")) {
+                send(`* ${idx + 1} FETCH (UID ${msg.uid} FLAGS ())`);
+            }
+        }
+        ok("STORE completed");
+    }
+
+    function cmdSearch(args: string, command: string) {
+        if (session.state !== "selected") {
+            no("No mailbox selected");
+            return;
+        }
+        const all = session.messages.map((_, i) => i + 1).join(" ");
+        send(`* SEARCH ${all}`);
+        ok(`SEARCH completed`);
+    }
+
+    const commands: {[name: string]: (args: string, command: string) => void} = {
+        "CAPABILITY": cmdCapability,
+        "NOOP": cmdNoop,
+        "LOGOUT": cmdLogout,
+        "LOGIN": cmdLogin,
+        "LIST": cmdList,
+        "SELECT": cmdSelect,
+        "STATUS": cmdStatus,
+        "FETCH": cmdFetch,
+        "UID FETCH": cmdFetch,
+        "STORE": cmdStore,
+        "UID STORE": cmdStore,
+        "SEARCH": cmdSearch,
+        "UID SEARCH": cmdSearch,
+    }
+
+    const tag = raw.slice(0, spaceIdx);
+    const rest = raw.slice(spaceIdx + 1);
+
+    for (const [name, action] of Object.entries(commands)) {
+        if (rest.startsWith(name)) {
+            const args = rest.slice(name.length).trim();
+            action(args, name);
+            return;
+        }
+    }
+
+
+    bad(`Command not implemented`);
 }
 
 // ---------------------------------------------------------------------------
@@ -404,10 +359,6 @@ function resolveSequenceSet(seqSet: string, total: number): number[] {
         }
     }
     return indices.filter((i) => i >= 0 && i < total);
-}
-
-function extractFlags(raw: string): string[] {
-    return raw.replace(/[()]/g, "").split(/\s+/).filter(Boolean);
 }
 
 function parseArgs(raw: string): string[] {
@@ -440,12 +391,16 @@ interface SnsMessage {
 }
 
 interface S3EventMessage {
-    Records?: Array<{
-        s3?: {
-            bucket: { name: string };
-            object: { key: string };
-        };
-    }>;
+    mail: {
+        destination: string[];
+    }
+    receipt: {
+        action: {
+            type: 'S3';
+            bucketName: string;
+            objectKey: string;
+        }
+    }
 }
 
 async function downloadEmlToBuffer(bucket: string, key: string): Promise<Buffer> {
@@ -469,7 +424,7 @@ function confirmSubscription(subscribeUrl: string): void {
 }
 
 function handleSns(req: http.IncomingMessage, res: http.ServerResponse): void {
-    if (req.method !== "POST" || req.url !== "/sns") {
+    if (req.method !== "POST") {
         res.writeHead(404).end("Not found");
         return;
     }
@@ -504,29 +459,38 @@ function handleSns(req: http.IncomingMessage, res: http.ServerResponse): void {
                 return;
             }
 
-            const records = event.Records ?? [];
-            for (const record of records) {
-                const bucket = record.s3?.bucket?.name;
-                const key = record.s3?.object?.key;
-                if (!bucket || !key) continue;
+            if (event.receipt?.action?.type !== "S3") {
+                console.error("[SNS] Message is not S3 SES receipt:", sns.Message.slice(0, 200));
+                res.writeHead(200).end("OK (non-S3 notification ignored)");
+                return;
+            }
 
-                try {
-                    // Download into memory so we can inspect the To: header before writing
-                    const emlBuffer = await downloadEmlToBuffer(bucket, key);
-                    const emlText = emlBuffer.toString("utf8");
+            const recipients = event.mail.destination;
+            const bucket = event.receipt.action.bucketName;
+            const key = event.receipt.action.objectKey;
 
-                    const toUser = extractToUser(emlText) ?? FALLBACK_USER;
+            try {
+                // Download into memory so we can inspect the To: header before writing
+                const emlBuffer = await downloadEmlToBuffer(bucket, key);
+                let emlText = emlBuffer.toString("utf8");
+
+                if (emlText.includes("\r\nX-SimpleLogin-Original-From: ")) {
+                    // revise FROM when forwarded by Proton Pass
+                    emlText = emlText.replace(/\r\nFrom: (.*)\r\n/, '\r\n');
+                    emlText = emlText.replace(/\r\nX-SimpleLogin-Original-From: (.*)\r\n/, '\r\nFrom: $1\r\n');
+                }
+
+                for (const recipient of recipients) {
+                    const toUser = extractToUser(recipient) ?? FALLBACK_USER;
                     const destDir = userDir(toUser);
                     const filename = `${sns.MessageId}_${path.basename(key)}.eml`;
                     const dest = path.join(destDir, filename);
 
-                    fs.writeFileSync(dest, emlBuffer);
-                    console.log(
-                        `[SNS] saved s3://${bucket}/${key} → ${dest} (To user: ${toUser})`
-                    );
-                } catch (e) {
-                    console.error(`[SNS] failed to process ${key}:`, e);
+                    fs.writeFileSync(dest, emlText, 'utf-8');
+                    console.log(`[SNS] saved s3://${bucket}/${key} → ${dest} (To user: ${toUser})`);
                 }
+            } catch (e) {
+                console.error(`[SNS] failed to process ${key}:`, e);
             }
 
             res.writeHead(200).end("OK");
