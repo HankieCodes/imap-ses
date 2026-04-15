@@ -1,0 +1,32 @@
+{
+  "name": "@imap-ses/workspace",
+  "version": "1.0.0",
+  "license": "LGPL-3.0-only",
+  "description": "Pseudo-IMAP server for AWS SES Email Receiving using S3",
+  "keywords": [],
+  "author": {
+    "name": "Hank Brekke-Peer",
+    "url": "https://hank.brekke-peer.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HankieCodes/imap-ses.git"
+  },
+  "bugs": {
+    "url": "https://github.com/HankieCodes/imap-ses/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "@imap-ses:registry": "https://npm.pkg.github.com"
+  },
+  "type": "module",
+  "engines": {
+    "node": "^24.0.0"
+  },
+  "packageManager": "pnpm@10.12.4",
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "typescript": "^6.0.2",
+    "wrangler": "^4.83.0"
+  }
+}

@@ -1,0 +1,6 @@
+dist/
+node_modules/
+
+cloudflare/wrangler.jsonc
+cloudflare/.wrangler
+cloudflare/worker-configuration.d.ts

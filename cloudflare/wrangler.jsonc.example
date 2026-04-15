@@ -1,0 +1,19 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "asus-imap-ses",
+    "main": "src/index.ts",
+    "compatibility_date": "2026-04-15",
+    "observability": {
+        "enabled": true
+    },
+    "vars": {
+        "SNS_TOPIC_ARN": "<<YOUR_SNS_TOPIC_ARN>>"
+    },
+    "vpc_services": [
+        {
+            "binding": "VPC_SERVICE",
+            "service_id": "<<YOUR_VPC_SERVICE_ID>>",
+            "remote": true
+        }
+    ]
+}

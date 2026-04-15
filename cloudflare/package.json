@@ -1,0 +1,15 @@
+{
+  "name": "@imap-ses/cloudflare-worker",
+  "version": "1.0.0",
+  "description": "See @imap-ses/workspace",
+  "license": "LGPL-3.0-or-later",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "sns-cloudflare-validator": "^1.0.2"
+  }
+}
