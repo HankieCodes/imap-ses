@@ -6,14 +6,12 @@
  *                   deletes the file — "read = consumed". Only INBOX supported.
  *
  * HTTP (port 2525): POST /sns receives AWS SNS notifications. On Notification,
- *                   downloads the S3 object, reads the "To:" header from the
- *                   EML, extracts the local-part (user portion before @), and
- *                   saves the file to /data/<user>/<messageId>_<basename>.eml.
+ *                   downloads the S3 object, reads the envelope destinations,
+ *                   and saves the file to /data/<user>/<messageId>_<basename>.eml.
  *                   Unknown / unparseable recipients go to /data/_unknown/.
  *
  * Environment variables:
  *   DATA_DIR         Root directory for per-user mail storage  (default: /data)
- *   AWS_REGION       AWS region for S3                         (default: us-east-1)
  *   SNS_PORT         HTTP port for SNS endpoint                (default: 2525)
  *   IMAP_PORT        TCP port for IMAP                         (default: 143)
  */
@@ -31,14 +29,13 @@ import { Readable } from "stream";
 // ---------------------------------------------------------------------------
 
 const DATA_DIR = process.env.DATA_DIR ?? "/data";
-const AWS_REGION = process.env.AWS_REGION ?? "us-east-1";
 const SNS_PORT = parseInt(process.env.SNS_PORT ?? "2525", 10);
 const IMAP_PORT = parseInt(process.env.IMAP_PORT ?? "143", 10);
 const FALLBACK_USER = "_unknown";
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const s3 = new S3Client({ region: AWS_REGION });
+const s3 = new S3Client();
 
 // ---------------------------------------------------------------------------
 // Mailstore helpers
@@ -86,6 +83,22 @@ function loadMessages(dir: string): Message[] {
 
 function extractToUser(address: string): string | null {
     return address.replace('@', '.').trim().toLowerCase() || null;
+}
+
+function buildEnvelope(eml: string): string {
+    const date = eml.match(/^Date: (.*)/im)?.[1]?.trim();
+    const subject = eml.match(/^Subject: (.*)/im)?.[1]?.trim();
+    const messageId = eml.match(/^Message-ID: <(.*)>/im)?.[1]?.trim();
+    const from = eml.match(/^From: (.*)/im)?.[1]?.trim();
+    const to = eml.match(/^To: (.*)/im)?.[1]?.trim();
+
+    function formatAddr(address: string) {
+        const [, name, local, domain] = address.match(/^(?:"?([^"<]+)"?\s+)?<?([\w.\-]+)@([\w.\-]+)>?/u) ?? [];
+        if (!local || !domain) throw new Error(`Invalid email address: ${address}`);
+        return `(${name ? `"${name}"` : "NIL"} NIL "${local}" "${domain}")`;
+    }
+
+    return `"${date}" "${subject}" (${formatAddr(from!)}) NIL NIL (${formatAddr(to!)}) NIL NIL NIL "${messageId}"`;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +186,7 @@ function processCommand(
             bad("LOGIN requires a username");
             return;
         }
-        session.username = parts[0].toLowerCase();
+        session.username = extractToUser(parts[0]) ?? FALLBACK_USER;
         session.mailDir = userDir(session.username);
         session.state = "authenticated";
         console.log(`[IMAP] LOGIN user=${session.username} dir=${session.mailDir}`);
@@ -246,19 +259,26 @@ function processCommand(
 
             const seqNum = idx + 1;
             let [headers, ...bodies] = eml.split("\r\n\r\n");
-            headers += "\r\n\r\n";
             const body = bodies.join("\r\n\r\n");
+            headers += "\r\n\r\n";
+
+            const uidIdentifier = command.startsWith('UID ') ?
+                `UID ${msg.uid} ` : '';
 
             if (itemSpec === "FLAGS") {
-                send(`* ${seqNum} FETCH (UID ${msg.uid} FLAGS ())`);
+                send(`* ${seqNum} FETCH (${uidIdentifier}FLAGS ())`);
             } else if (itemSpec === "RFC822.HEADER") {
-                send(`* ${seqNum} FETCH (UID ${msg.uid} RFC822.HEADER {${headers.length}}`);
+                send(`* ${seqNum} FETCH (${uidIdentifier}RFC822.HEADER {${headers.length}}`);
                 send(headers + ")");
             } else if (itemSpec === "RFC822.TEXT") {
-                send(`* ${seqNum} FETCH (UID ${msg.uid} RFC822.TEXT {${body.length}}`);
+                send(`* ${seqNum} FETCH (${uidIdentifier}RFC822.TEXT {${body.length}}`);
                 send(body + ")");
             } else if (itemSpec === "RFC822") {
-                send(`* ${seqNum} FETCH (UID ${msg.uid} RFC822 {${eml.length}}`);
+                send(`* ${seqNum} FETCH (${uidIdentifier}RFC822 {${eml.length}}`);
+                send(eml + ")");
+            } else if (itemSpec === "BODY[] ENVELOPE FLAGS") {
+                const envelope = buildEnvelope(eml);
+                send(`* ${seqNum} FETCH (${uidIdentifier}FLAGS () ENVELOPE (${envelope}) BODY[] {${eml.length}}`);
                 send(eml + ")");
             } else {
                 bad(`FETCH spec ${itemSpec} not supported`);

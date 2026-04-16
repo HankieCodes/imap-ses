@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  imap-ses:
+    container_name: imap-ses
+    image: ghcr.io/hankiecodes/imap-ses:latest
+    restart: unless-stopped
+    environment:
+      AWS_REGION: <region>
+      AWS_ACCESS_KEY_ID: <key>
+      AWS_SECRET_ACCESS_KEY: <secret>
+    volumes:
+      - data:/data
+    networks:
+      - internal
+
+volumes:
+  data:
+
+networks:
+  internal:
+    external: true
+    name: internal
