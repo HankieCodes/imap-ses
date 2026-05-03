@@ -70,6 +70,6 @@ jobs:
               ${IS_PRERELEASE:+"--prerelease"} \
               --generate-notes
           
-          docker pull ${built_tag}
-          docker tag ${built_tag} ghcr.io/hankiecodes/imap-ses:${tag}
+          docker pull ghcr.io/hankiecodes/imap-ses:${built_tag}
+          docker tag ghcr.io/hankiecodes/imap-ses:${built_tag} ghcr.io/hankiecodes/imap-ses:${tag}
           docker push ghcr.io/hankiecodes/imap-ses:${tag}
