@@ -65,7 +65,6 @@ jobs:
           export IS_PRERELEASE=$(case "$tag" in *rc*) printf 'true';; esac)
           
           gh release create "$tag" \
-              "build/*.zip" \
               --repo="$GITHUB_REPOSITORY" \
               --title="$tag" \
               ${IS_PRERELEASE:+"--prerelease"} \
