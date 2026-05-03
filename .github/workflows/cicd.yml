@@ -29,11 +29,10 @@ jobs:
           
           pnpm run build
           docker build -t ghcr.io/hankiecodes/imap-ses:${tag} .
-      - name: Tag and Push Images
-        run: |
-          docker tag ghcr.io/hankiecodes/imap-ses:${tag} ghcr.io/hankiecodes/imap-ses:${GITHUB_REF_NAME}
-          
+
           docker push ghcr.io/hankiecodes/imap-ses:${tag}
+          
+          docker tag ghcr.io/hankiecodes/imap-ses:${tag} ghcr.io/hankiecodes/imap-ses:${GITHUB_REF_NAME}
           docker push ghcr.io/hankiecodes/imap-ses:${GITHUB_REF_NAME}
           
           if [ "${GITHUB_REF_NAME}" == "master" ]; then
