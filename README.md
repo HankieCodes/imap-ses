@@ -18,6 +18,8 @@ Based on:
 - https://docs.aws.amazon.com/ses/latest/dg/receiving-email-action-s3.html
 - https://github.com/devinstewart/sns-cloudflare-validator/blob/main/README.md
 
+---
+
 1. Add a DNS record for AWS SES Email Receiving
    ```
    @  IN  MX  10 inbound-smtp.<region>.amazonaws.com.
@@ -31,7 +33,7 @@ Based on:
       ```shell
       $ git clone https://github.com/HankieCodes/imap-ses.git
       $ cd imap-ses/cloudflare
-      $ cp wrangler.jsonc.example wrangler.jsonc
+      $ cp wrangler.example.jsonc wrangler.jsonc
      
       #  Edit wrangler.jsonc with your values:
       #   - SNS_TOPIC_ARN

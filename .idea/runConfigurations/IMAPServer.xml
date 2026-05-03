@@ -1,0 +1,9 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="IMAPServer" type="NodeJSConfigurationType" path-to-js-file="server.ts" typescript-loader="bundled" working-dir="$PROJECT_DIR$/imap">
+    <envs>
+      <env name="DATA_DIR" value="/tmp/email" />
+      <env name="IMAP_PORT" value="1143" />
+    </envs>
+    <method v="2" />
+  </configuration>
+</component>
