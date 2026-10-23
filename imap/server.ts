@@ -89,8 +89,8 @@ function buildEnvelope(eml: string): string {
     const date = eml.match(/^Date: (.*)/im)?.[1]?.trim();
     const subject = eml.match(/^Subject: (.*)/im)?.[1]?.trim();
     const messageId = eml.match(/^Message-ID: <(.*)>/im)?.[1]?.trim();
-    const from = eml.match(/^From: (.*)/im)?.[1]?.trim();
-    const to = eml.match(/^To: (.*)/im)?.[1]?.trim();
+    const from = eml.match(/\nFrom: (.*(?:\r\n .*)*)/i)?.[1]?.trim();
+    const to = eml.match(/\nTo: (.*(?:\r\n .*)*)/i)?.[1]?.trim();
 
     function formatAddr(address: string) {
         const [, name, local, domain] = address.match(/^(?:"?([^"<]+)"?\s+)?<?([\w.\-]+)@([\w.\-]+)>?/u) ?? [];
@@ -243,8 +243,13 @@ function processCommand(
         }
 
         const [seqSet, ...itemParts] = args.split(" ");
-        const itemSpec = itemParts.join(" ").replace(/[()]/g, "").toUpperCase();
+        let itemSpec = itemParts.join(" ").replace(/[()]/g, "").toUpperCase();
         const indices = resolveSequenceSet(seqSet, session.messages.length);
+
+        if (itemSpec.includes("UID")) {
+            itemSpec = itemSpec.split(' ').filter(part => part !== 'UID').join(' ');
+            command = `UID ${command}`;
+        }
 
         for (const idx of indices) {
             const msg = session.messages[idx];
