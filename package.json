@@ -1,6 +1,6 @@
 {
   "name": "@imap-ses/workspace",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "LGPL-3.0-only",
   "description": "Pseudo-IMAP server for AWS SES Email Receiving using S3",
   "keywords": [],
